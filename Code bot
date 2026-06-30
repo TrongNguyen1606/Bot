@@ -1,0 +1,219 @@
+const { Client, IntentsBitField, EmbedBuilder, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, REST, Routes, SlashCommandBuilder } = require('discord.js');
+const fs = require('fs');
+const client = new Client({
+    intents: [
+        IntentsBitField.Flags.Guilds,
+        IntentsBitField.Flags.GuildMessages,
+        IntentsBitField.Flags.MessageContent,
+    ],
+});
+
+const TOKEN      = 'MTUwNzU4NjA0NTI0NjQ0MzU1Mg.G-f7A3.3UAN7OA0WeYvyXMPED-iHRiIRjtIMkGqPBpVnY';
+const CLIENT_ID  = '1507586045246443552';
+const GUILD_ID   = '1449688312536371242';
+const CHANNEL_ID = '1513232804744527922';
+const OWNER_ID   = '1349733407491362832';
+
+const LARGE_IMAGE_URL = 'https://i.imgur.com/b6Cz3Kg.gif';
+const SMALL_ICON_URL  = 'https://i.imgur.com/A2ujBip.gif';
+const STORE_NAME      = 'Update Đơn Hàng';
+const FOOTER_TEXT     = 'Trong Nguyem Store | https://discord.gg/eH8sPZdvZT';
+
+// Ảnh QR cố định
+const QR_IMAGE = 'https://cdn.discordapp.com/attachments/1454501531062894692/1516503314378789086/Screenshot_20260617_005924.jpg?ex=6a32e145&is=6a318fc5&hm=01daa7cf6ca75b87310a1d22c253547dda7fb85dbd56e912856678230ef87448&'; // Thay bằng link imgur của ảnh QR bạn
+
+const colors = ['#FF0000','#00FF00','#0000FF','#FFFF00','#FF00FF','#00FFFF'];
+let colorIndex = 0;
+let orders = new Map();
+const ORDERS_FILE = 'orders.json';
+
+let spamActive = false;
+let spamInterval = null;
+const spamPending = new Map();
+
+function loadOrders(){try{if(fs.existsSync(ORDERS_FILE)){const data=fs.readFileSync(ORDERS_FILE,'utf8');orders=new Map(Object.entries(JSON.parse(data)));}}catch(e){orders=new Map();}}
+function saveOrders(){try{fs.writeFileSync(ORDERS_FILE,JSON.stringify(Object.fromEntries(orders),null,2));}catch(e){}}
+
+const commands = [
+    new SlashCommandBuilder()
+        .setName('spam')
+        .setDescription('Spam tin nhắn')
+        .addStringOption(opt => opt.setName('noidung').setDescription('Nội dung muốn spam').setRequired(true)),
+    new SlashCommandBuilder()
+        .setName('unspam')
+        .setDescription('Dừng spam'),
+].map(cmd => cmd.toJSON());
+
+async function registerCommands(){
+    try{
+        const rest = new REST({ version: '10' }).setToken(TOKEN);
+        await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
+        console.log('✅ Đã đăng ký slash commands!');
+    }catch(e){ console.error('Lỗi đăng ký:', e.message); }
+}
+
+client.on('ready', async () => {
+    console.log('Bot online: ' + client.user.tag);
+    loadOrders();
+    await registerCommands();
+});
+
+client.on('interactionCreate', async (interaction) => {
+    if(interaction.isButton() && interaction.customId.startsWith('spam_')){
+        const isOwner = interaction.user.id === OWNER_ID;
+        const isAdmin = interaction.guild && interaction.member?.permissions.has(PermissionFlagsBits.Administrator);
+        if(!isOwner && !isAdmin) return interaction.reply({ content: '❌ Bạn không có quyền!', ephemeral: true });
+        const soLuong = interaction.customId.split('_')[1];
+        const noiDung = spamPending.get(interaction.user.id);
+        if(!noiDung) return interaction.reply({ content: '❌ Hết hạn! Dùng `/spam` lại nhé.', ephemeral: true });
+        const channel = interaction.channel;
+        if(soLuong === 'auto'){
+            spamActive = true;
+            await interaction.update({ content: '🔁 Đang spam tự động... Dùng `/unspam` để dừng!', components: [] });
+            spamInterval = setInterval(async () => {
+                if(!spamActive){ clearInterval(spamInterval); return; }
+                await channel.send(noiDung).catch(()=>{});
+            }, 1000);
+        } else {
+            const count = parseInt(soLuong);
+            await interaction.update({ content: '✅ Đang gửi ' + count + ' tin nhắn...', components: [] });
+            for(let i = 0; i < count; i++){
+                await channel.send(noiDung).catch(()=>{});
+                await new Promise(r => setTimeout(r, 500));
+            }
+        }
+        return;
+    }
+
+    if(!interaction.isChatInputCommand()) return;
+    const { commandName } = interaction;
+
+    if(commandName === 'spam'){
+        const isOwner = interaction.user.id === OWNER_ID;
+        const isAdmin = interaction.guild && interaction.member?.permissions.has(PermissionFlagsBits.Administrator);
+        if(!isOwner && !isAdmin) return interaction.reply({ content: '❌ Bạn không có quyền!', ephemeral: true });
+        const noiDung = interaction.options.getString('noidung');
+        spamPending.set(interaction.user.id, noiDung);
+        const embed = new EmbedBuilder()
+            .setTitle('📨 Spam Tin Nhắn')
+            .setAuthor({ name: STORE_NAME, iconURL: SMALL_ICON_URL })
+            .setDescription('**Nội dung:** ' + noiDung + '\n\nBạn muốn spam bao nhiêu tin nhắn?')
+            .setColor('#FF0000')
+            .setFooter({ text: FOOTER_TEXT });
+        const row1 = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('spam_1').setLabel('1').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('spam_5').setLabel('5').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('spam_10').setLabel('10').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId('spam_20').setLabel('20').setStyle(ButtonStyle.Danger),
+        );
+        const row2 = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('spam_auto').setLabel('🔁 Auto').setStyle(ButtonStyle.Danger),
+        );
+        await interaction.reply({ embeds: [embed], components: [row1, row2], ephemeral: true });
+    }
+
+    if(commandName === 'unspam'){
+        const isOwner = interaction.user.id === OWNER_ID;
+        const isAdmin = interaction.guild && interaction.member?.permissions.has(PermissionFlagsBits.Administrator);
+        if(!isOwner && !isAdmin) return interaction.reply({ content: '❌ Bạn không có quyền!', ephemeral: true });
+        if(!spamActive) return interaction.reply({ content: '❌ Không có spam nào đang chạy!', ephemeral: true });
+        spamActive = false;
+        clearInterval(spamInterval);
+        await interaction.reply({ content: '✅ Đã dừng spam!', ephemeral: true });
+    }
+});
+
+client.on('messageCreate', async (message) => {
+    if(message.author.bot) return;
+
+    // !qr - Gửi ảnh QR cố định
+    if(message.content === '!qr'){
+        const embed = new EmbedBuilder()
+            .setTitle('💳 QR Thanh Toán')
+            .setAuthor({ name: STORE_NAME, iconURL: SMALL_ICON_URL })
+            .setDescription(
+                '**Ngân hàng:** MB Bank\n' +
+                '**Số tài khoản:** `0333924930`\n' +
+                '**Tên tài khoản:** Nguyễn Đình Trọng\n\n' +
+                '📌 Quét mã QR bên dưới để thanh toán!'
+            )
+            .setColor('#00AAFF')
+            .setImage(QR_IMAGE)
+            .setFooter({ text: FOOTER_TEXT });
+        await message.reply({ embeds: [embed] });
+    }
+
+    // !add
+    if(message.content.startsWith('!add')){
+        if(!message.member?.permissions.has(PermissionFlagsBits.Administrator))return message.reply('❌ Không có quyền!');
+        const args=message.content.split(' ');
+        const userIdMatch=message.content.match(/<@!?(\d+)>/);
+        if(!userIdMatch)return message.reply('❌ Mention khách hàng theo dạng @user');
+        const userId=userIdMatch[1];
+        const ticket=args.slice(2).join(' ')||'Không có mô tả';
+        const orderId='order_'+Date.now();
+        const createdAt=new Date().toLocaleString('vi-VN',{timeZone:'Asia/Ho_Chi_Minh'});
+        let customer;
+        try{customer=await client.users.fetch(userId);}catch(e){return message.reply('❌ Không tìm thấy khách hàng!');}
+        const embed=new EmbedBuilder().setTitle(STORE_NAME).setAuthor({name:STORE_NAME,iconURL:SMALL_ICON_URL}).setDescription('**ID Đơn:** '+orderId+'\n**Khách Hàng:** <@'+userId+'>\n**Ticket:** '+ticket+'\n**Thời Gian:** '+createdAt+'\n**Trạng Thái:** 🟡 Đang Xử Lý').setColor(colors[colorIndex]).setThumbnail(customer.displayAvatarURL({dynamic:true})).setImage(LARGE_IMAGE_URL).setFooter({text:FOOTER_TEXT});
+        colorIndex=(colorIndex+1)%colors.length;
+        const targetChannel=await client.channels.fetch(CHANNEL_ID);
+        if(!targetChannel)return message.reply('❌ Không tìm thấy kênh!');
+        const sentMessage=await targetChannel.send({embeds:[embed]});
+        orders.set(orderId,{ticket,messageId:sentMessage.id,channelId:sentMessage.channel.id,createdAt,customerId:userId,customerAvatar:customer.displayAvatarURL({dynamic:true})});
+        saveOrders();
+        await message.reply('✅ Đã tạo đơn: `'+orderId+'`');
+    }
+
+    if(message.content.startsWith('!s ')){
+        if(!message.member?.permissions.has(PermissionFlagsBits.Administrator))return message.reply('❌ Không có quyền!');
+        const args=message.content.split(' ');
+        const inputId=args[1];
+        if(!inputId)return message.reply('❌ Nhập ID đơn hàng!\nVD: !s order_123');
+        let orderIdToUpdate=null,orderToUpdate=null;
+        for(const[orderId,order]of orders.entries()){if(order.messageId===inputId||orderId===inputId){orderIdToUpdate=orderId;orderToUpdate=order;break;}}
+        if(!orderToUpdate)return message.reply('❌ Không tìm thấy đơn hàng!');
+        try{
+            const targetChannel=await client.channels.fetch(orderToUpdate.channelId);
+            const originalMessage=await targetChannel.messages.fetch(orderToUpdate.messageId).catch(()=>null);
+            if(!originalMessage)return message.reply('❌ Không tìm thấy tin nhắn!');
+            const updatedEmbed=new EmbedBuilder().setTitle(STORE_NAME).setAuthor({name:STORE_NAME,iconURL:SMALL_ICON_URL}).setDescription('💜 **ID Đơn:** '+orderIdToUpdate+'\n💜 **Khách Hàng:** <@'+orderToUpdate.customerId+'>\n💜 **Ticket:** '+orderToUpdate.ticket+'\n💜 **Thời Gian:** '+orderToUpdate.createdAt+'\n💜 **Trạng Thái:** ✅ Đã Hoàn Thành').setColor(colors[colorIndex]).setThumbnail(orderToUpdate.customerAvatar).setImage(LARGE_IMAGE_URL).setFooter({text:'Trọng Nguyễn Community'});
+            colorIndex=(colorIndex+1)%colors.length;
+            await originalMessage.edit({embeds:[updatedEmbed]});
+            orders.delete(orderIdToUpdate);
+            saveOrders();
+            await message.reply('✅ Đã hoàn thành đơn: `'+orderIdToUpdate+'`');
+        }catch(e){await message.reply('❌ Lỗi: '+e.message);}
+    }
+
+    if(message.content.startsWith('!huy ')){
+        if(!message.member?.permissions.has(PermissionFlagsBits.Administrator))return message.reply('❌ Không có quyền!');
+        const args=message.content.split(' ');
+        const inputId=args[1];
+        if(!inputId)return message.reply('❌ Nhập ID đơn hàng!\nVD: !huy order_123');
+        let orderIdToUpdate=null,orderToUpdate=null;
+        for(const[orderId,order]of orders.entries()){if(order.messageId===inputId||orderId===inputId){orderIdToUpdate=orderId;orderToUpdate=order;break;}}
+        if(!orderToUpdate)return message.reply('❌ Không tìm thấy đơn hàng!');
+        try{
+            const targetChannel=await client.channels.fetch(orderToUpdate.channelId);
+            const originalMessage=await targetChannel.messages.fetch(orderToUpdate.messageId).catch(()=>null);
+            if(!originalMessage)return message.reply('❌ Không tìm thấy tin nhắn!');
+            const updatedEmbed=new EmbedBuilder().setTitle(STORE_NAME).setAuthor({name:STORE_NAME,iconURL:SMALL_ICON_URL}).setDescription('🛑 **ID Đơn:** '+orderIdToUpdate+'\n🛑 **Khách Hàng:** <@'+orderToUpdate.customerId+'>\n🛑 **Ticket:** '+orderToUpdate.ticket+'\n🛑 **Thời Gian:** '+orderToUpdate.createdAt+'\n🛑 **Trạng Thái:** ❌ Đã bị hủy').setColor(colors[colorIndex]).setThumbnail(orderToUpdate.customerAvatar).setImage(LARGE_IMAGE_URL).setFooter({text:'Trọng Nguyễn Community'});
+            colorIndex=(colorIndex+1)%colors.length;
+            await originalMessage.edit({embeds:[updatedEmbed]});
+            orders.delete(orderIdToUpdate);
+            saveOrders();
+            await message.reply('❌ Đã hủy đơn `'+orderIdToUpdate+'`');
+        }catch(e){await message.reply('❌ Lỗi: '+e.message);}
+    }
+
+    if(message.content==='!list'){
+        if(!message.member?.permissions.has(PermissionFlagsBits.Administrator))return message.reply('❌ Không có quyền!');
+        if(orders.size===0)return message.reply('📭 Không có đơn nào!');
+        let list='📋 **Danh sách đơn đang xử lý:**\n\n';
+        for(const[orderId,order]of orders.entries()){list+='• `'+orderId+'` — '+order.ticket+' — <@'+order.customerId+'>\n';}
+        await message.reply(list);
+    }
+});
+
+client.login(TOKEN);
